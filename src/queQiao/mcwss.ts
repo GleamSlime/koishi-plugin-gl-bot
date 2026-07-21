@@ -16,6 +16,8 @@ class McWss {
   public ctx: Context;
   public connectedClients: Set<WebSocket> = new Set();
 
+  private disposables: (() => void)[] = [];
+
   constructor(
     ctx: Context,
     public adapter: GLQueQiaoAdapter,
@@ -30,19 +32,25 @@ class McWss {
       this.wss = new WebSocketServer({ host: cfg.wsHost, port: cfg.wsPort });
       ctx.logger.info(`Websocket服务器已启动 ws://${cfg.wsHost}:${cfg.wsPort}`);
 
-      // 设置 WebSocket 连接处理
       this.setupWebSocketHandlers();
     });
 
-    // 设置消息处理（只需要一次）
     this.setupMessageHandler();
 
-    ctx.on('dispose', async () => {
-      if (this.wss) {
-        this.wss.close();
-      }
-      this.connectedClients.clear();
+    const dispose = ctx.on('dispose', async () => {
+      this.dispose();
     });
+    this.disposables.push(dispose);
+  }
+
+  public dispose() {
+    this.disposables.forEach(d => d());
+    this.disposables = [];
+
+    if (this.wss) {
+      this.wss.close();
+    }
+    this.connectedClients.clear();
   }
 
   public setupWebSocketHandlers() {
@@ -169,7 +177,7 @@ class McWss {
 
   public setupMessageHandler() {
     let imgurl: any = '<unknown image url>';
-    this.ctx.on('message', async session => {
+    const dispose = this.ctx.on('message', async session => {
       // this.ctx.logger.info(
       //   `收到聊天消息: ${session.content} 来自 ${session.platform}:${session.channelId}`,
       // );
@@ -286,6 +294,7 @@ class McWss {
         }
       }
     });
+    this.disposables.push(dispose);
   }
 
   verifyHeaders(headers: IncomingMessage['headers']): {

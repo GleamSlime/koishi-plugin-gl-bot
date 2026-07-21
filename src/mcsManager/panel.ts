@@ -38,7 +38,6 @@ export class MCSManagerPanel {
       config.mcManagerHost,
       config.mcManagerWs,
     );
-    this.initialize();
   }
 
   async initialize() {
@@ -190,14 +189,6 @@ export class MCSManagerPanel {
                 },
                 10 * 60 * 1000,
               );
-
-              // 异步调用，避免阻塞
-              this.handleRemoteServices().catch(error => {
-                console.debug(
-                  '定时任务中handleRemoteServices调用失败:',
-                  error.message,
-                );
-              });
             }
           }
         }

@@ -115,6 +115,7 @@ export class MCSManagerInstance {
     if (this.queQiao) {
       logger.info(`[${this.queQiao?.config.serverName || '未知'}] 实例已销毁`);
       this.queQiao?.dispose();
+      this.queQiao = null;
     }
   }
 }

@@ -44,6 +44,8 @@ class MinecraftQueQiao {
   public enUS: any;
   public zhCN: any;
 
+  private disposables: (() => void)[] = [];
+
   public get serverName() {
     return this.config.serverName ?? '--';
   }
@@ -367,7 +369,8 @@ class MinecraftQueQiao {
   }
 
   public setupWatchChannel() {
-    this.ctx.on('message', async session => {
+    const dispose = this.ctx.on('message', async session => {
+      if (this.isDisposing) return;
       this.config.watchChannel.forEach(channel => {
         const [platform, channelId] = channel.split(':');
         if (
@@ -392,6 +395,7 @@ class MinecraftQueQiao {
         }
       });
     });
+    this.disposables.push(dispose);
   }
 
   public async reconnectWebSocket() {
@@ -428,6 +432,12 @@ class MinecraftQueQiao {
         ws.on('open', () => {
           logger.info(`[${this.serverName}] WebSocket 重连成功`);
           this.clearReconnectInterval();
+          if (this.ws) {
+            this.ws.removeAllListeners();
+            if (this.ws.readyState === WebSocket.OPEN) {
+              this.ws.close();
+            }
+          }
           this.ws = ws;
           this.bindWebSocketEvents();
         });
@@ -462,7 +472,8 @@ class MinecraftQueQiao {
   }
 
   public setupMessageHandler() {
-    this.ctx.on('message', async session => {
+    const dispose = this.ctx.on('message', async session => {
+      if (this.isDisposing) return;
       if (!this.isValidChannel(session)) {
         return;
       }
@@ -475,6 +486,7 @@ class MinecraftQueQiao {
         await this.handleRconCommand(session);
       }
     });
+    this.disposables.push(dispose);
   }
 
   public isValidChannel(session: any): boolean {
@@ -633,15 +645,25 @@ class MinecraftQueQiao {
   }
 
   public setupDisposeHandler() {
-    this.ctx.on('dispose', async () => {
+    const dispose = this.ctx.on('dispose', async () => {
       this.isDisposing = true;
       await this.dispose();
-      this.isDisposing = false;
     });
+    this.disposables.push(dispose);
   }
 
   public async dispose() {
+    this.isDisposing = true;
+
+    this.disposables.forEach(d => d());
+    this.disposables = [];
+
     this.ctx.registry.delete(McWss);
+
+    if (this.plFork) {
+      this.plFork.dispose();
+      this.plFork = undefined;
+    }
 
     if (this.ws) {
       this.ws.removeAllListeners();
