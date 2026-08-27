@@ -60,9 +60,20 @@ export class MCBotCreateCommand extends BotCommandBase {
 
             if (result && fileExists) {
               session.send('下载完毕，即将创建服务器实例并解压文件...');
+
+              // 定位首个可用 daemon，并以其 ip:port 作为上传 wsUrl
+              const targetRemote = this.bot.panel.remotes[0];
+              if (!targetRemote) {
+                results.push(`状态: 未找到可用远程节点`);
+                return results.join('\n');
+              }
+              const wsUrl = targetRemote.port
+                ? `${targetRemote.ip}:${targetRemote.port}`
+                : `${targetRemote.ip}`;
+
               await this.bot.panel.api.instanceUploadByZip(
-                this.bot.panel.remotes.find(r => isEqual(r.remarks, '节点1'))
-                  .uuid,
+                targetRemote.uuid,
+                wsUrl,
                 {
                   nickname: status
                     .filter(r => !isEqual(r.at(0), '<'))

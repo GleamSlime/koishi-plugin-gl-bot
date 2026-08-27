@@ -383,7 +383,9 @@ class MinecraftQueQiao {
             data: {
               message: [
                 {
-                  text: `[${session.event._data.group_name}] <${session.username}> ${clearSessionContentToMcMessage(session.content)}`,
+                  text: `[${session.event._data.group_name}] <${
+                    session.username
+                  }> ${clearSessionContentToMcMessage(session.content)}`,
                   color:
                     this.extractAndRemoveColor(this.config.joinMsg).color ||
                     'white',
@@ -404,7 +406,9 @@ class MinecraftQueQiao {
     this.reconnectIntervalId = setInterval(async () => {
       if (this.reconnectAttempts >= (this.config.maxReconnectCount || 3)) {
         logger.error(
-          `[${this.serverName}] 已达到最大重连次数 (${this.config.maxReconnectCount || 3} 次)，停止重连。`,
+          `[${this.serverName}] 已达到最大重连次数 (${
+            this.config.maxReconnectCount || 3
+          } 次)，停止重连。`,
         );
         this.clearReconnectInterval();
         return;
@@ -443,7 +447,10 @@ class MinecraftQueQiao {
         });
 
         ws.on('error', err => {
-          logger.error(`[${this.serverName}] 重连时发生错误:`, err);
+          logger.error(
+            `[${this.serverName}] <${this.reconnectAttempts}> | ${this.config.wsHost}:${this.config.wsPort} 重连时发生错误:`,
+            err,
+          );
           ws.close();
         });
 

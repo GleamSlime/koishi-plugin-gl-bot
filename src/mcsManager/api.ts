@@ -26,7 +26,6 @@ export class MCSManagerAPI {
   constructor(
     private http: HTTP,
     private baseUrl: string,
-    private wsUrl: string,
     private authCookie?: string,
   ) {}
 
@@ -267,6 +266,7 @@ export class MCSManagerAPI {
 
   async instanceUploadByZip(
     daemonId: string,
+    wsUrl: string,
     config: Partial<CreateInstanceConfig>,
     file: {
       filename: string;
@@ -301,7 +301,7 @@ export class MCSManagerAPI {
     }
 
     const newFile = await this.send<MCManagerPanelResponse<{ id: string }>>(
-      `${this.wsUrl}/upload-new/${data.data.password}`,
+      `${wsUrl}/upload-new/${data.data.password}`,
       {
         headers: this.requestHeaders,
         method: 'POST',
@@ -327,10 +327,6 @@ export class MCSManagerAPI {
     const totalSize = fileBuffer.length;
     let offset = 0;
 
-    // console.log(
-    //   `开始分片上传，文件大小: ${totalSize} bytes，分片大小: ${chunkSize} bytes`,
-    // );
-
     onProcessHandle?.(`正在解压文件...`);
     while (offset < totalSize) {
       const end = Math.min(offset + chunkSize, totalSize);
@@ -341,7 +337,6 @@ export class MCSManagerAPI {
 
       const formData = new FormData();
       formData.append('file', chunkBlob, file.filename);
-      // const progress = ((end / totalSize) * 100).toFixed(0);
 
       if (IS_DEV) {
         console.log(
@@ -349,7 +344,7 @@ export class MCSManagerAPI {
         );
       }
       const response = await this.send(
-        `${this.wsUrl}/upload-piece/${newFile.data.data.id}`,
+        `${wsUrl}/upload-piece/${newFile.data.data.id}`,
         {
           method: 'POST',
           params: {

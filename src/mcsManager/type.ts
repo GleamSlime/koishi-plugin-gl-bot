@@ -25,7 +25,7 @@ export interface UserInfo {
 export interface ServiceRemoteItem {
   uuid: string;
   ip: string;
-  port: number;
+  port: number | string;
   prefix: string;
   available: boolean;
   remarks: string;
@@ -34,6 +34,8 @@ export interface ServiceRemoteItem {
 export interface ServiceRemoteItemCustom extends ServiceRemoteItem {
   instances: MCSManagerInstance[];
   auth?: ServiceInstanceConnectAuth;
+  // 该节点 WS 认证 Key（来自 config，每个 daemon 独立）
+  key?: string;
 }
 
 export interface ServiceRemoteInstanceItem {

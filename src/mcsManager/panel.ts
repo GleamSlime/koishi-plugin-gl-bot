@@ -8,7 +8,6 @@ import { RemoteInstanceStatusEnum } from './constants';
 import { MCSManagerInstance } from './instance';
 import {
   ServiceRemoteInstanceItem,
-  ServiceRemoteItem,
   ServiceRemoteItemCustom,
 } from './type';
 import { MCSManagerWebSocketIO } from './ws';
@@ -33,11 +32,7 @@ export class MCSManagerPanel {
     public readonly ctx: Context,
     public readonly config: GLBotConfigType,
   ) {
-    this.api = new MCSManagerAPI(
-      ctx.http,
-      config.mcManagerHost,
-      config.mcManagerWs,
-    );
+    this.api = new MCSManagerAPI(ctx.http, config.mcManagerHost);
   }
 
   async initialize() {
@@ -53,26 +48,28 @@ export class MCSManagerPanel {
 
     await this.handleRemoteServices();
 
-    // await this.getAvailableRemoteInstance();
+    await this.getAvailableRemoteInstance();
 
     this.watchRemoteConnections();
   }
 
-  // 获取远程服务及其实例列表 [全量]
+  // 获取远程服务及其实例列表 [全量] - 来源为 config.mcManagerRemotes
   async handleRemoteServices(insertRemotes?: boolean) {
     try {
-      const remoteList: ServiceRemoteItem[] =
-        await this.api.getServiceRemoteList();
-      const insertList: ({
-        instances: MCSManagerInstance[];
-      } & ServiceRemoteItem)[] = [];
+      const remoteList = this.config.mcManagerRemotes ?? [];
+      const insertList: ServiceRemoteItemCustom[] = [];
 
       for (const remote of remoteList) {
+        if (!remote.available) continue;
+
+        const { mcManagerKey, ...remoteItem } = remote;
         const instanceList = await this.api.getServiceRemoteInstanceList(
           remote.uuid,
         );
 
         insertList.push({
+          ...remoteItem,
+          key: mcManagerKey,
           instances: instanceList.map(
             item =>
               new MCSManagerInstance(
@@ -80,14 +77,13 @@ export class MCSManagerPanel {
                 this.config,
                 this.api,
                 this,
-                remote,
+                remoteItem,
                 item,
                 {
                   autoCreateQueQiao: insertRemotes !== false,
                 },
               ),
           ),
-          ...remote,
         });
       }
 
@@ -126,26 +122,6 @@ export class MCSManagerPanel {
     }
   }
 
-  ruiningRemoteConnectionsCount(
-    remotes: ServiceRemoteItemCustom[],
-  ): Set<string> {
-    return new Set(
-      Array.from(
-        remotes
-          .map(remote =>
-            remote.instances
-              .map(instance =>
-                isEqual(instance.cfg.status, RemoteInstanceStatusEnum.RUNNING)
-                  ? instance.cfg.instanceUuid
-                  : null,
-              )
-              .filter(Boolean),
-          )
-          .flat(),
-      ),
-    );
-  }
-
   /// 定时检查远程连接状态
   watchRemoteConnections() {
     clearInterval(this.watchRemoteClock as NodeJS.Timeout);
@@ -153,68 +129,77 @@ export class MCSManagerPanel {
     const watchRemoteDelay = IS_DEV ? 60 * 1000 : 60 * 1000;
     this.watchRemoteClock = setInterval(async () => {
       try {
-        // 重新获取远程服务及其实例列表 对比 现有连接状态 分出 关闭/新开启的实例
-        const oldUuids = this.ruiningRemoteConnectionsCount(this.remotes);
+        // 拉取最新实例数据（不自动创建鹊桥、不更新 this.remotes）
         const newRemotes = await this.handleRemoteServices(false);
-        const newUuids = this.ruiningRemoteConnectionsCount(newRemotes);
-
-        // 新开的实例
-        for (const uuid of newUuids) {
-          if (!oldUuids.has(uuid)) {
-            let remoteIndex = 0;
-            let instanceIndex = 0;
-            let instance: MCSManagerInstance | null = null;
-
-            newRemotes.find(r =>
-              r.instances.find(i => {
-                const result = isEqual(i.cfg.instanceUuid, uuid);
-                if (result) {
-                  remoteIndex = this.remotes.indexOf(r);
-                  instanceIndex = r.instances.indexOf(i);
-                  instance = i;
-                }
-                return result;
-              }),
-            );
-
-            if (instance) {
-              logger.info(
-                `[${instance.cfg.config.nickname}] 服务器实例已启动，正在建立远程连接...`,
-              );
-              instance.dispose();
-
-              setTimeout(
-                () => {
-                  instance.createQueQiao();
-                },
-                10 * 60 * 1000,
-              );
-            }
-          }
+        if (!newRemotes.length) {
+          return;
         }
 
-        // 关闭的实例
-        for (const uuid of oldUuids) {
-          if (!newUuids.has(uuid)) {
-            let remoteIndex = 0;
-            let instanceIndex = 0;
-            let instance: MCSManagerInstance | null;
+        // 对比现有实例状态，处理状态变化
+        for (const newRemote of newRemotes) {
+          const oldRemote = this.remotes.find(r =>
+            isEqual(r.uuid, newRemote.uuid),
+          );
+          if (!oldRemote) {
+            continue;
+          }
 
-            this.remotes.find(r =>
-              r.instances.find(i => {
-                const result = isEqual(i.cfg.instanceUuid, uuid);
-                if (result) {
-                  remoteIndex = this.remotes.indexOf(r);
-                  instanceIndex = r.instances.indexOf(i);
-                  instance = i;
-                }
-                return result;
-              }),
+          // 收集新实例 uuid 集合，用于检测被删除的实例
+          const newUuids = new Set(
+            newRemote.instances.map(i => i.cfg.instanceUuid),
+          );
+
+          // 处理状态变化
+          for (const newInstance of newRemote.instances) {
+            const oldInstance = oldRemote.instances.find(i =>
+              isEqual(i.cfg.instanceUuid, newInstance.cfg.instanceUuid),
+            );
+            if (!oldInstance) {
+              continue;
+            }
+
+            const wasRunning = isEqual(
+              oldInstance.cfg.status,
+              RemoteInstanceStatusEnum.RUNNING,
+            );
+            const isRunning = isEqual(
+              newInstance.cfg.status,
+              RemoteInstanceStatusEnum.RUNNING,
             );
 
-            instance.dispose();
-            this.remotes[remoteIndex].instances.splice(instanceIndex, 1);
+            // 同步最新实例配置
+            oldInstance.cfg = newInstance.cfg;
+
+            if (!wasRunning && isRunning) {
+              // 实例刚启动，尝试连接鹊桥 ws
+              logger.info(
+                `[${newInstance.cfg.config.nickname}] 服务器已启动，尝试连接鹊桥...`,
+              );
+              oldInstance.createQueQiao();
+            } else if (wasRunning && !isRunning) {
+              // 实例已关闭，断开鹊桥 ws 并回收资源
+              logger.info(
+                `[${oldInstance.cfg.config.nickname}] 服务器已关闭，断开鹊桥连接并回收...`,
+              );
+              oldInstance.dispose();
+            }
           }
+
+          // 回收已从节点删除的实例
+          const removedInstances: MCSManagerInstance[] = [];
+          oldRemote.instances = oldRemote.instances.filter(oldInstance => {
+            if (!newUuids.has(oldInstance.cfg.instanceUuid)) {
+              removedInstances.push(oldInstance);
+              return false;
+            }
+            return true;
+          });
+          removedInstances.forEach(instance => {
+            logger.info(
+              `[${instance.cfg.config.nickname}] 实例已从节点移除，回收资源...`,
+            );
+            instance.dispose();
+          });
         }
       } catch (error) {
         // 静默处理定时任务中的网络错误
@@ -242,7 +227,7 @@ export class MCSManagerPanel {
       // 上限检测
       if (
         this.remoteConnectionsMap.size >=
-        this.config.mcManagerMaxRemoteConnections
+        this.config.mcManagerMaxConnectWs
       ) {
         return;
       }
@@ -257,18 +242,16 @@ export class MCSManagerPanel {
         remote.auth = instanceConnectAuth;
       }
 
-      // FIXME: 似乎目前没有ws的需求
       if (remote.auth) {
-        // const ws = new MCSManagerWebSocketIO(
-        //   this.ctx,
-        //   this.config,
-        //   this.api,
-        //   remote,
-        //   instance,
-        //   remote.auth,
-        // );
-        // this.remoteConnectionsMap.set(uuid, ws);
-        // return ws;
+        const ws = new MCSManagerWebSocketIO(
+          this.ctx,
+          this.api,
+          remote,
+          instance,
+          remote.auth,
+        );
+        this.remoteConnectionsMap.set(uuid, ws);
+        return ws;
       }
 
       logger.error(

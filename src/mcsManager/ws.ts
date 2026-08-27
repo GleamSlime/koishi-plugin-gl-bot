@@ -2,7 +2,6 @@ import * as io from 'socket.io-client';
 
 import { Context, Logger } from 'koishi';
 import { isEqual } from 'lodash';
-import { GLBotConfigType } from '../gl';
 import { MCSManagerAPI } from './api';
 import {
   ServiceInstanceConnectAuth,
@@ -20,7 +19,6 @@ export class MCSManagerWebSocketIO {
 
   constructor(
     private readonly ctx: Context,
-    private readonly config: GLBotConfigType,
     private readonly api: MCSManagerAPI,
     private remote: ServiceRemoteItemCustom,
     private instance: ServiceRemoteInstanceItem,
@@ -29,12 +27,28 @@ export class MCSManagerWebSocketIO {
     this.initialize();
   }
 
+  // 拼接该节点自身的 WS 地址 remote.ip(含协议) : remote.port
+  private buildWsUrl() {
+    const { ip, port } = this.remote;
+    if (!ip) return '';
+    // ip 形如 wss://panel.gleamslime.com，port 形如 23444 / 443
+    return port ? `${ip}:${port}` : `${ip}`;
+  }
+
   initialize() {
     if (this.connect) {
       this.connect.close();
     }
 
-    this.connect = io.connect(this.config.mcManagerWs, {
+    const wsUrl = this.buildWsUrl();
+    if (!wsUrl) {
+      logger.error(
+        `[${this.remote.remarks}] 节点缺少 ip/port，跳过该 daemon 连接`,
+      );
+      return;
+    }
+
+    this.connect = io.connect(wsUrl, {
       multiplex: false,
       reconnectionDelayMax: 1000 * 3,
       timeout: 1000 * 3,
@@ -87,10 +101,19 @@ export class MCSManagerWebSocketIO {
 
   public authenticate() {
     this.connect.once('auth', ({ event, status }) => {
+      // 节点 Key 认证不通过：跳过该 daemon，停止重连
+      if (!isEqual(event, 'auth') || !isEqual(status, 200)) {
+        logger.error(
+          `[${this.remote.remarks}] 节点 Key 认证失败，跳过该 daemon 连接`,
+        );
+        this.isAuthenticated = false;
+        // disconnect() 会停止自动重连
+        this.connect.disconnect();
+        return;
+      }
+
       this.connect.once('stream/auth', pack => {
         if (
-          isEqual(event, 'auth') &&
-          isEqual(status, 200) &&
           isEqual(pack.status, 200) &&
           isEqual(pack.data, true)
         ) {
@@ -104,6 +127,7 @@ export class MCSManagerWebSocketIO {
         logger.error(
           `远程实例 ${this.instance.config.nickname} 认证失败，无法建立连接`,
         );
+        this.connect.disconnect();
       });
 
       this.connect.emit('stream/auth', {
@@ -114,7 +138,7 @@ export class MCSManagerWebSocketIO {
     });
 
     this.connect.emit('auth', {
-      data: this.config.mcManagerKey,
+      data: this.remote.key,
     });
   }
 }

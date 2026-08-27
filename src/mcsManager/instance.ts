@@ -65,6 +65,11 @@ export class MCSManagerInstance {
       return this.queQiao;
     }
 
+    // 实例未运行则不创建鹊桥
+    if (!isEqual(this.cfg.status, RemoteInstanceStatusEnum.RUNNING)) {
+      return null;
+    }
+
     const ymlResult = await this.api.readFile(
       this.remote.uuid,
       this.cfg.instanceUuid,
@@ -77,29 +82,36 @@ export class MCSManagerInstance {
     const ymlString: string = ymlJsonStr?.data ?? '';
     const yml: MCSManagerQueQiaoYMLConfig = YAML.parse(ymlString);
 
-    const mcsHost = this.config.mcManagerHost
-      ?.replace(/^https?:\/\//, '')
-      .split(':')[0];
-    const host = mcsHost || 'localhost';
-    // console.log(
-    //   { mcsHost, host },
-    //   this.config.mcManagerHost,
-    //   yml.websocket_server.port,
-    // );
+    // 从 queQiaoServers 配置匹配当前实例（通过 server_name）
+    const queQiaoServers = this.config.queQiaoServers ?? [];
+    const serverConfig = queQiaoServers.find(
+      s => isEqual(s.serverName, yml.server_name) && s.enable,
+    );
+
+    if (!serverConfig) {
+      logger.info(
+        `[${yml.server_name}] 未找到启用的鹊桥配置，跳过创建`,
+      );
+      return null;
+    }
+
+    // 拆分配置项的 host:port
+    const [rconHost, rconPortStr] = serverConfig.rconServerHost.split(':');
+    const [wsHost, wsPortStr] = serverConfig.wsHost.split(':');
 
     this.queQiao = new MinecraftQueQiao(
       this.ctx,
       this.panel.gl.queQiaoAdapter,
       {
         rconEnable: yml.rcon.enable,
-        rconServerHost: host,
-        rconServerPort: yml.rcon.port,
-        rconPassword: yml.rcon.password,
+        rconServerHost: rconHost,
+        rconServerPort: rconPortStr ? Number(rconPortStr) : yml.rcon.port,
+        rconPassword: serverConfig.rconPassword || yml.rcon.password,
 
         wsServer: '客户端',
-        wsHost: host,
-        wsPort: yml.websocket_server.port,
-        Token: yml.access_token,
+        wsHost: wsHost,
+        wsPort: wsPortStr ? Number(wsPortStr) : yml.websocket_server.port,
+        Token: serverConfig.Token || yml.access_token,
         serverName: yml.server_name,
 
         sendToChannel: this.config.queQiaoSendToChannel,
