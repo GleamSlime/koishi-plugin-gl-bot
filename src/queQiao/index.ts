@@ -50,13 +50,18 @@ class MinecraftQueQiao {
     return this.config.serverName ?? '--';
   }
 
+  // WS 是否处于连接打开状态（供健康判断，重连放弃/已断开时为 false）
+  public get isConnected() {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
   constructor(
     public ctx: Context,
     public adapter: GLQueQiaoAdapter,
     public config: Schemastery.TypeS<typeof MinecraftQueQiao.Config>,
   ) {
     this.initialize();
-    this.config.maxReconnectCount = this.config.maxReconnectCount || 100;
+    this.config.maxReconnectCount = this.config.maxReconnectCount || 1000;
     this.config.maxReconnectInterval =
       this.config.maxReconnectInterval || 1000 * 10;
   }
@@ -94,6 +99,29 @@ class MinecraftQueQiao {
     } catch (err) {
       logger.error(`[${this.serverName}] 连接到RCON服务器时发生错误:`, err);
       throw err;
+    }
+  }
+
+  /**
+   * 确保 rcon 处于已认证状态，未连接/掉线时尝试重连。
+   * 未启用 rcon 或连接失败时返回 false。
+   */
+  public async ensureRconConnected(): Promise<boolean> {
+    if (!this.config.rconEnable || !this.config.rconServerHost || !this.rcon) {
+      return false;
+    }
+
+    if (this.rcon.authenticated) {
+      return true;
+    }
+
+    try {
+      await this.rcon.connect();
+      logger.info(`[${this.serverName}] RCON重新连接成功`);
+      return this.rcon.authenticated;
+    } catch (err) {
+      logger.error(`[${this.serverName}] RCON重新连接失败:`, err);
+      return false;
     }
   }
 
@@ -267,6 +295,11 @@ class MinecraftQueQiao {
       return;
     }
 
+    // 退出事件必须先从内存在线列表中移除，避免残留导致下线后仍在计算在线时长（与数据库记录是否存在无关）
+    if (data.event_name === 'PlayerQuitEvent') {
+      delete MCBotGameOnline.list[this.serverName].list[data.player?.nickname];
+    }
+
     const user = await this.ctx.database.get('mcUser', {
       uuid: data.player?.uuid,
     });
@@ -299,13 +332,16 @@ class MinecraftQueQiao {
       return;
     }
 
-    // 更新在线时间 （加入游戏时会更新lastTime，退出游戏时通过lastTime算出本次在线时间，加到onlineTimeJSON中）
+    // 退出结算本次在线时长；lastTime 置空表示已下线，避免在线/榜单命令误把下线后的时间累加
     if (data.event_name === 'PlayerQuitEvent') {
+      // lastTime 为空表示已结算下线（退出事件重复触发或残留已被结算），跳过避免重复累加
+      if (!user[0].lastTime) {
+        return;
+      }
+
       const lastTime = new Date(user[0].lastTime).getTime();
       const nowTime = Date.now();
-      const onlineDuration = Math.floor((nowTime - lastTime) / 1000); // 在线时长，单位秒
-
-      delete MCBotGameOnline.list[this.serverName].list[data.player?.nickname];
+      const onlineDuration = Math.max(0, Math.floor((nowTime - lastTime) / 1000));
 
       let onlineTimeJSON: { mc?: Record<string, number> } = {};
       try {
@@ -327,7 +363,7 @@ class MinecraftQueQiao {
         { uuid: data.player?.uuid },
         {
           nickname: data.player?.nickname,
-          lastTime: new Date(),
+          lastTime: null,
           level: data.player?.experience_level || 0,
           onlineTimeJSON: JSON.stringify(onlineTimeJSON),
         },
@@ -606,7 +642,9 @@ class MinecraftQueQiao {
   }
 
   public async sendRconCommand(command: string): Promise<string> {
-    if (!this.rcon.authenticated) {
+    // 未连接时先尝试（重）连接，避免启动时连接失败后永远无法执行 rcon 命令；
+    // rcon 未配置/未启用时 this.rcon 为 undefined，直接返回空响应
+    if (!(await this.ensureRconConnected())) {
       return '';
     }
 

@@ -38,7 +38,7 @@ export const WsConf = Schema.object({
     .description('连接服务的成功时发送的消息(&颜色单词&可以设置颜色)'),
   event: Schema.bitset(mcEvent).description('选择需要监听的事件'),
   maxReconnectCount: Schema.number()
-    .default(20)
+    .default(1000)
     .description('[仅客户端生效]客户端最大重连次数'),
   maxReconnectInterval: Schema.number()
     .default(60000)

@@ -5,6 +5,8 @@ import * as McSchedule from './mc.schedule';
 declare module 'koishi' {
   interface Tables {
     mcUser: McSchedule.McUser;
+    mcRemark: McSchedule.McRemark;
+    mcBackup: McSchedule.McBackup;
   }
 }
 

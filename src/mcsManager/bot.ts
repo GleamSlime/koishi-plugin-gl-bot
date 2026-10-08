@@ -7,10 +7,12 @@ import {
   ARKBotRestartCommand,
   ARKBotStartCommand,
   ARKBotStopCommand,
+  MCBotBackupCommand,
   MCBotGameOnline,
   MCBotHealthCommand,
   MCBotListCommand,
   MCBotOnlineTimeCommand,
+  MCBotRemarkCommand,
   MCBotRestartCommand,
   MCBotStartCommand,
   MCBotStopCommand,
@@ -38,6 +40,8 @@ export class MCSManagerBot {
       MCBotOnlineTimeCommand,
       MCBotGameOnline,
       MCBotHealthCommand,
+      MCBotRemarkCommand,
+      MCBotBackupCommand,
 
       ARKBotListCommand,
       ARKBotRestartCommand,
@@ -79,8 +83,10 @@ export class MCSManagerBot {
           GLCommandRegister.commandRegExp[formatCommand] = new RegExp(
             `^${cmdStr
               .replace(/(\S+)\.(\S+)(?!=\>)/g, '$1 $2')
-              .replace(/ \<\S+\.\.\s\>/g, '\(\\s\)?\.\*\?')
-              .replace(/ \<\S+\>/g, '\(\\s\)?\(\\S+\)?')}$`,
+              // <args...> / <args... > 可变参数：匹配任意剩余内容（含空格）
+              .replace(/ \<\S+\.\.\s?\>/g, '\\s.*')
+              // 单参数：保持可选，避免裸指令（如「服务器 列表」）无法匹配
+              .replace(/ \<\S+\>/g, '\(\\s\\S+\)?')}$`,
           );
         }
       }
@@ -117,7 +123,17 @@ export class MCSManagerBot {
           const baseCommand = findCmd[0];
           const cmd = GLCommandRegister.commands[baseCommand];
           if (cmd) {
-            const args = formatCommand.replace(baseCommand, '').trim();
+            // 从原始消息中截取参数，保留大小写（避免 URL 等参数被大写化）
+            const normalized = session.content
+              .replace(/(\S+)\.(\S+)/g, '$1 $2')
+              .trim();
+            const baseIndex = normalized
+              .toLocaleUpperCase()
+              .indexOf(baseCommand);
+            const args =
+              baseIndex >= 0
+                ? normalized.slice(baseIndex + baseCommand.length).trim()
+                : '';
             const response = await cmd.authenticate(
               session.argv,
               args.length ? args.split(/\s/g) : [],

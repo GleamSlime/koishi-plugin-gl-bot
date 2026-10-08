@@ -26,15 +26,15 @@ export abstract class BotCommandBase {
   public async authenticate(cmd: Argv, args: string[]) {
     // console.log(cmd.session.event);
     const userRole = cmd.session.event.member?.roles?.at(0);
-    if (
-      this.roles.length > 0 &&
-      !this.roles.includes(userRole as BotCommandRole)
-    ) {
-      logger.error(
-        `用户 ${cmd.session.event.user.id}[${userRole}] 没有权限使用指令 ${this.command}`,
-      );
-      return '您没有权限使用此指令。';
-    }
+    // if (
+    //   this.roles.length > 0 &&
+    //   !this.roles.includes(userRole as BotCommandRole)
+    // ) {
+    //   logger.error(
+    //     `用户 ${cmd.session.event.user.id}[${userRole}] 没有权限使用指令 ${this.command}`,
+    //   );
+    //   return '您没有权限使用此指令。';
+    // }
 
     return await this.handle?.(cmd, args);
   }

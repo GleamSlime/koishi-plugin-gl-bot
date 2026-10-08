@@ -117,7 +117,7 @@ export class MCSManagerPanel {
   getAvailableRemoteInstance() {
     for (const remote of this.remotes) {
       for (const instance of remote.instances) {
-        this.createMCSManagerConnection(remote, instance.cfg);
+        this.createMCSManagerConnection(remote, instance);
       }
     }
   }
@@ -141,6 +141,8 @@ export class MCSManagerPanel {
             isEqual(r.uuid, newRemote.uuid),
           );
           if (!oldRemote) {
+            // 配置中新增/启用的节点，直接并入
+            this.remotes.push(newRemote);
             continue;
           }
 
@@ -155,6 +157,11 @@ export class MCSManagerPanel {
               isEqual(i.cfg.instanceUuid, newInstance.cfg.instanceUuid),
             );
             if (!oldInstance) {
+              // 新建的实例立即并入，无需等待重启即可出现在列表中
+              logger.info(
+                `[${newInstance.cfg.config.nickname}] 发现新实例，已加入管理`,
+              );
+              oldRemote.instances.push(newInstance);
               continue;
             }
 
@@ -201,6 +208,20 @@ export class MCSManagerPanel {
             instance.dispose();
           });
         }
+
+        // 检查所有 RUNNING 实例的 WS 健康状态，断连/认证卡死时自动重建
+        for (const remote of this.remotes) {
+          for (const instance of remote.instances) {
+            if (
+              !isEqual(instance.cfg.status, RemoteInstanceStatusEnum.RUNNING)
+            ) {
+              continue;
+            }
+            await this.createMCSManagerConnection(remote, instance);
+            // 鹊桥 WS 健康兜底：MC 进程重启（实例状态未变）导致 queQiao 断连放弃后自动重建
+            await instance.createQueQiao();
+          }
+        }
       } catch (error) {
         // 静默处理定时任务中的网络错误
         console.debug('MCSManager定时任务执行失败:', error.message);
@@ -211,17 +232,27 @@ export class MCSManagerPanel {
   // 创建远程连接
   async createMCSManagerConnection(
     remote: ServiceRemoteItemCustom,
-    instance: ServiceRemoteInstanceItem,
+    instance: MCSManagerInstance,
   ) {
-    if (isEqual(instance.status, RemoteInstanceStatusEnum.RUNNING)) {
-      const uuid = instance.instanceUuid;
+    if (
+      isEqual(instance.cfg.status, RemoteInstanceStatusEnum.RUNNING)
+    ) {
+      const uuid = instance.cfg.instanceUuid;
+      const existing = this.remoteConnectionsMap.get(uuid);
 
-      // 已存在的实例且连接中 直接返回
-      if (
-        this.remoteConnectionsMap.has(uuid) &&
-        this.remoteConnectionsMap.get(uuid).connect.connected
-      ) {
-        return this.remoteConnectionsMap.get(uuid);
+      // 已连接且已认证视为健康，直接复用
+      if (existing && existing.connect.connected && existing.isAuthenticated) {
+        return existing;
+      }
+
+      // 不健康则清理旧连接，避免 socket 泄漏及重连卡死残留后不重建
+      if (existing) {
+        try {
+          existing.connect.disconnect();
+        } catch (err) {
+          // 忽略断开旧连接时的异常
+        }
+        this.remoteConnectionsMap.delete(uuid);
       }
 
       // 上限检测
@@ -229,85 +260,97 @@ export class MCSManagerPanel {
         this.remoteConnectionsMap.size >=
         this.config.mcManagerMaxConnectWs
       ) {
+        logger.info(
+          `[${instance.cfg.config.nickname}] WS 连接数已达上限(${this.config.mcManagerMaxConnectWs})，该实例暂未连接，控制台日志兜底不可用`,
+        );
         return;
       }
 
-      // 试图自动获取认证信息
-      if (isEmpty(remote.auth)) {
-        const instanceConnectAuth =
-          await this.api.getServiceInstanceConnectAuth(
-            remote.uuid,
-            instance.instanceUuid,
-          );
-        remote.auth = instanceConnectAuth;
+      // 逐实例获取认证信息（stream 密码与实例绑定，缓存在实例上避免复用其他实例的凭据）
+      if (isEmpty(instance.auth)) {
+        instance.auth =
+          (await this.api
+            .getServiceInstanceConnectAuth(remote.uuid, uuid)
+            .catch((err: any) => {
+              logger.warn(
+                `[${instance.cfg.config.nickname}] 获取实例流认证信息失败:`,
+                err,
+              );
+              return null;
+            })) ?? undefined;
       }
 
-      if (remote.auth) {
+      if (instance.auth) {
         const ws = new MCSManagerWebSocketIO(
           this.ctx,
           this.api,
           remote,
-          instance,
-          remote.auth,
+          instance.cfg,
+          instance.auth,
+          text => instance.handleConsoleText(text),
+          () => instance.notifyStreamAuthenticated(),
         );
         this.remoteConnectionsMap.set(uuid, ws);
         return ws;
       }
 
       logger.error(
-        `远程实例 ${instance.config.nickname} 缺少连接认证信息，无法建立连接`,
+        `远程实例 ${instance.cfg.config.nickname} 缺少连接认证信息，无法建立连接`,
       );
     }
   }
 
   // 模糊搜索实例 通过 实例名称
   async searchInstanceByName(instanceName: string) {
-    const instanceMap = new Map<
+    // 连词（精确子串）匹配：输入整体作为子串匹配名称
+    const substringMatches: Map<
       string,
       {
         remote: ServiceRemoteItemCustom;
         instance: MCSManagerInstance;
         sort: number;
       }
-    >();
+    > = new Map();
+    // 分词（单字）匹配：输入拆字后逐字匹配，作为连词无结果时的降级
+    const tokenMatches: Map<
+      string,
+      {
+        remote: ServiceRemoteItemCustom;
+        instance: MCSManagerInstance;
+        sort: number;
+      }
+    > = new Map();
 
     const keywords = instanceName.length < 10 ? instanceName.split('') : [];
 
     for (const remote of this.remotes) {
       for (const instance of remote.instances) {
-        // 连词搜索
-        if (instance.cfg.config.nickname.includes(instanceName)) {
-          instanceMap.set(instance.cfg.instanceUuid, {
-            remote,
-            instance,
-            sort: 1,
-          });
+        const uuid = instance.cfg.instanceUuid;
+        const nickname = instance.cfg.config.nickname;
+
+        // 连词命中后不再参与分词匹配，避免弱相关结果混入
+        if (nickname.includes(instanceName)) {
+          substringMatches.set(uuid, { remote, instance, sort: 1 });
+          continue;
         }
 
-        // 分词搜索
+        // 分词匹配：单字命中数作为权重
         if (keywords.length) {
-          // 索引词权重
-          keywords.forEach(keyword => {
-            if (instance.cfg.config.nickname.includes(keyword)) {
-              if (!instanceMap.has(instance.cfg.instanceUuid)) {
-                instanceMap.set(instance.cfg.instanceUuid, {
-                  remote,
-                  instance,
-                  sort: 1,
-                });
-              } else {
-                // 已存在则增加权重
-                const record = instanceMap.get(instance.cfg.instanceUuid);
-                record.sort += 1;
-                instanceMap.set(instance.cfg.instanceUuid, record);
-              }
-            }
-          });
+          let hit = 0;
+          for (const keyword of keywords) {
+            if (nickname.includes(keyword)) hit++;
+          }
+          if (hit > 0) {
+            tokenMatches.set(uuid, { remote, instance, sort: hit });
+          }
         }
       }
     }
 
-    return Array.from(instanceMap.values()).sort((a, b) => b.sort - a.sort);
+    // 连词匹配存在时只返回连词结果，否则降级用分词匹配
+    const result =
+      substringMatches.size > 0 ? substringMatches : tokenMatches;
+    return Array.from(result.values()).sort((a, b) => b.sort - a.sort);
   }
 
   public dispose() {

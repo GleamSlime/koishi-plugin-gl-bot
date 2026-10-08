@@ -432,6 +432,264 @@ export class MCSManagerAPI {
       })
     ).data;
   }
+
+  /**
+   * 安全读取实例内文件，文件不存在/读取失败时返回 null。
+   * 面板响应为 JSON 字符串 {data: 文件内容}，其余情况原样返回。
+   */
+  async readFileSafe(
+    daemonId: string,
+    instanceId: string,
+    target: string,
+  ): Promise<string | null> {
+    try {
+      const raw = await this.readFile(daemonId, instanceId, target);
+
+      if (typeof raw !== 'string' || raw.length === 0) {
+        return null;
+      }
+
+      if (raw.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed?.data === 'string') {
+            return parsed.data;
+          }
+        } catch (err) {
+          // 非 JSON 时原样返回
+        }
+      }
+
+      return raw;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  // 列出实例内指定目录的文件。
+  // 注意：守护进程分页从 0 开始（sliceStart = page * pageSize），
+  // 且面板会将非数字的 page 转为 0，因此首页必须传 page=0
+  async listFiles(
+    daemonId: string,
+    instanceId: string,
+    target: string,
+    page = 0,
+    pageSize = 100,
+  ): Promise<{
+    name: string;
+    type: number;
+    size: number;
+    time: number | string;
+  }[]> {
+    const result = await this.send<
+      MCManagerPanelResponse<{
+        page: number;
+        pageSize: number;
+        total: number;
+        items: {
+          name: string;
+          type: number;
+          size: number;
+          time: number | string;
+        }[];
+      }> | {
+        page: number;
+        pageSize: number;
+        total: number;
+        items: {
+          name: string;
+          type: number;
+          size: number;
+          time: number | string;
+        }[];
+      }
+    >(`${this.baseUrl}/files/list`, {
+      method: 'GET',
+      headers: this.requestHeaders,
+      validateStatus: () => true,
+      params: {
+        daemonId,
+        uuid: instanceId,
+        target,
+        page,
+        page_size: pageSize,
+        token: this.userInfo.token,
+      },
+    });
+
+    if (result.status !== 200) {
+      return [];
+    }
+
+    const data = result.data as any;
+
+    return data?.items ?? data?.data?.items ?? [];
+  }
+
+  // 在实例内创建目录：不抛 HTTP 异常，返回面板真实状态与错误信息（目录已存在时视为成功）
+  async mkdirFile(
+    daemonId: string,
+    instanceId: string,
+    target: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.send<MCManagerPanelResponse<unknown>>(
+      `${this.baseUrl}/files/mkdir`,
+      {
+        method: 'POST',
+        headers: this.requestHeaders,
+        validateStatus: () => true,
+        params: {
+          daemonId,
+          uuid: instanceId,
+          token: this.userInfo.token,
+        },
+        data: {
+          target,
+        },
+      },
+    );
+
+    if (result.status === 200) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      error: MCSManagerAPI.extractError(result) ?? `HTTP ${result.status}`,
+    };
+  }
+
+  // 从面板响应中提取错误信息（异常时响应体结构不固定，逐个兼容）
+  private static extractError(result: { data: unknown }): string | undefined {
+    const data = result.data as unknown;
+
+    if (typeof data === 'string' && data.length > 0 && data.length <= 500) {
+      return data;
+    }
+
+    const body = data as {
+      data?: unknown;
+      message?: string;
+      time?: string;
+    };
+
+    if (body && typeof body === 'object') {
+      if (typeof body.data === 'string') return body.data;
+      if (typeof body.message === 'string') return body.message;
+      if (typeof body.time === 'string') return body.time;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * 压缩实例内文件（守护进程压缩完成后才返回，大存档可能耗时较久）
+   * @param source 输出的压缩包路径，注意守护进程仅支持压缩包与源文件同目录
+   * @param targets 需要压缩的文件/目录列表，如 ['./world']
+   */
+  async compressFile(
+    daemonId: string,
+    instanceId: string,
+    source: string,
+    targets: string[],
+  ): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.send<MCManagerPanelResponse<unknown>>(
+      `${this.baseUrl}/files/compress`,
+      {
+        method: 'POST',
+        headers: this.requestHeaders,
+        validateStatus: () => true,
+        timeout: 10 * 60 * 1000,
+        params: {
+          daemonId,
+          uuid: instanceId,
+          token: this.userInfo.token,
+        },
+        data: {
+          source,
+          targets,
+          type: 1,
+          code: 'utf-8',
+        },
+      },
+    );
+
+    if (result.status === 200) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      error: MCSManagerAPI.extractError(result) ?? `HTTP ${result.status}`,
+    };
+  }
+
+  // 删除实例内文件：不抛 HTTP 异常，返回面板真实状态与错误信息
+  async deleteFiles(
+    daemonId: string,
+    instanceId: string,
+    targets: string[],
+  ): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.send<MCManagerPanelResponse<unknown>>(
+      `${this.baseUrl}/files`,
+      {
+        method: 'DELETE',
+        headers: this.requestHeaders,
+        validateStatus: () => true,
+        params: {
+          daemonId,
+          uuid: instanceId,
+          token: this.userInfo.token,
+        },
+        data: {
+          targets,
+        },
+      },
+    );
+
+    if (result.status === 200) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      error: MCSManagerAPI.extractError(result) ?? `HTTP ${result.status}`,
+    };
+  }
+
+  // 移动/重命名实例内文件：不抛 HTTP 异常，返回面板真实状态与错误信息。
+  // 面板接口格式：targets 为 [源路径, 目标路径] 元组数组，如 [['./a.zip', './backup/a.zip']]
+  async moveFiles(
+    daemonId: string,
+    instanceId: string,
+    moves: [string, string][],
+  ): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.send<MCManagerPanelResponse<unknown>>(
+      `${this.baseUrl}/files/move`,
+      {
+        method: 'PUT',
+        headers: this.requestHeaders,
+        validateStatus: () => true,
+        params: {
+          daemonId,
+          uuid: instanceId,
+          token: this.userInfo.token,
+        },
+        data: {
+          targets: moves,
+        },
+      },
+    );
+
+    if (result.status === 200) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      error: MCSManagerAPI.extractError(result) ?? `HTTP ${result.status}`,
+    };
+  }
 }
 
 function extractCookiesWithRegex(cookieStr) {

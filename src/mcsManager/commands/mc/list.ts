@@ -45,6 +45,13 @@ export class MCBotListCommand extends BotCommandBase {
         RemoteInstanceStatusName[item.instance.cfg.status] === filteredStatus,
     );
 
+    // 按最后开服时间（lastDatetime）倒序，最近开服的排在前面
+    nameInstances.sort(
+      (a, b) =>
+        (b.instance.cfg.config.lastDatetime || 0) -
+        (a.instance.cfg.config.lastDatetime || 0),
+    );
+
     const list = [];
 
     for (const item of nameInstances) {
