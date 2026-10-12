@@ -127,7 +127,7 @@ export class MCSManagerInstance {
         this.cfg.instanceUuid,
         '/config/QueQiao/config.yml',
       );
-      yml = ymlString ? (YAML.parse(ymlString) ?? null) : null;
+      yml = ymlString ? YAML.parse(ymlString) ?? null : null;
     } catch (err) {
       yml = null;
     }
@@ -159,11 +159,7 @@ export class MCSManagerInstance {
     const adapter = this.panel.gl.queQiaoAdapter;
     const existing = adapter.servers[yml.server_name];
     if (existing && !existing.isDisposing) {
-      if (
-        existing.isConnected ||
-        existing.ws ||
-        existing.reconnectIntervalId
-      ) {
+      if (existing.isConnected || existing.ws || existing.reconnectIntervalId) {
         this.queQiao = existing;
         this.queQiaoOwned = false;
         return this.queQiao;
@@ -175,7 +171,8 @@ export class MCSManagerInstance {
     }
 
     // 拆分配置项的 host:port
-    const [rconHost, rconPortStr] = serverConfig.rconServerHost?.split(':') ?? [];
+    const [rconHost, rconPortStr] =
+      serverConfig.rconServerHost?.split(':') ?? [];
     const [wsHost, wsPortStr] = serverConfig.wsHost?.split(':') ?? [];
 
     this.queQiao = new MinecraftQueQiao(
@@ -207,6 +204,15 @@ export class MCSManagerInstance {
 
   // 实例销毁逻辑
   public dispose() {
+    // 实例停止后无人在线，清空内存在线列表，避免重启后残留导致重连玩家被判为重复加入
+    const serverName = this.serverName;
+    if (MCBotGameOnline.list[serverName]) {
+      delete MCBotGameOnline.list[serverName];
+    }
+
+    this.logParser?.dispose();
+    this.logParser = null;
+
     if (this.queQiao) {
       logger.info(`[${this.queQiao?.config.serverName || '未知'}] 实例已销毁`);
 
@@ -255,7 +261,9 @@ export class MCSManagerInstance {
 
   // 流认证完成的时刻，用于丢弃重连时 daemon 回放的旧日志
   public notifyStreamAuthenticated() {
-    logger.info(`[${this.logLabel}] 实例控制台日志流已连通，玩家事件兜底开始监听`);
+    logger.info(
+      `[${this.logLabel}] 实例控制台日志流已连通，玩家事件兜底开始监听`,
+    );
     this.getLogParser().notifyAuthenticated();
   }
 
@@ -281,6 +289,11 @@ export class MCSManagerInstance {
     const onlineList = MCBotGameOnline.list[serverName].list;
 
     if (event.type === 'join') {
+      // 控制台同一行会被 daemon 重复推送（重连回放/多 chunk），已在线的玩家再次 join 视为重复，避免重复广播与计时重置
+      if (onlineList[nickname]) {
+        return;
+      }
+
       onlineList[nickname] = {
         nickname,
         uuid: '',
@@ -296,25 +309,32 @@ export class MCSManagerInstance {
         y: 0,
         z: 0,
       };
-      this.broadcastLogMessage(`${serverName} ${nickname} 加入了服务器！`);
+      this.broadcastLogMessage(`[${serverName}] ${nickname} 加入了服务器！`);
       await this.touchUserOnJoin(nickname);
       return;
     }
 
     if (event.type === 'quit') {
+      // 玩家不在在线列表即视为重复的离开日志，避免重复结算
+      if (!onlineList[nickname]) {
+        return;
+      }
+
       delete onlineList[nickname];
-      this.broadcastLogMessage(`${serverName} ${nickname} 离开了服务器！`);
+      this.broadcastLogMessage(`[${serverName}] ${nickname} 离开了服务器！`);
       await this.settleUserOnQuit(nickname);
       return;
     }
 
-    this.broadcastLogMessage(
-      `${serverName} ${nickname}: ${event.message}`,
-    );
+    this.broadcastLogMessage(`[${serverName}] ${nickname}: ${event.message}`);
   }
 
-  private get serverName() {
-    return this.queQiao?.config.serverName || this.cfg.config.nickname || '未知服务器';
+  public get serverName() {
+    return (
+      this.queQiao?.config.serverName ||
+      this.cfg.config.nickname ||
+      '未知服务器'
+    );
   }
 
   // 日志来源没有 uuid：仅按昵称匹配，多行时取最近进入的一行
@@ -340,7 +360,9 @@ export class MCSManagerInstance {
         level: 0,
         onlineTimeJSON: '{}',
       });
-      logger.info(`[${this.logLabel}] 已为「${nickname}」新建 mcUser 记录并开始计时`);
+      logger.info(
+        `[${this.logLabel}] 已为「${nickname}」新建 mcUser 记录并开始计时`,
+      );
       return;
     }
 
@@ -354,7 +376,9 @@ export class MCSManagerInstance {
   private async settleUserOnQuit(nickname: string) {
     const user = await this.findUserByNickname(nickname);
     if (!user) {
-      logger.info(`[${this.logLabel}] 结算时长失败：mcUser 中无「${nickname}」记录`);
+      logger.info(
+        `[${this.logLabel}] 结算时长失败：mcUser 中无「${nickname}」记录`,
+      );
       return;
     }
     if (!user.lastTime) {
@@ -380,7 +404,8 @@ export class MCSManagerInstance {
       onlineTimeJSON.mc = {};
     }
     const playerId = `${user.uuid || nickname}|${this.serverName}`;
-    onlineTimeJSON.mc[playerId] = (onlineTimeJSON.mc[playerId] ?? 0) + onlineDuration;
+    onlineTimeJSON.mc[playerId] =
+      (onlineTimeJSON.mc[playerId] ?? 0) + onlineDuration;
 
     logger.info(
       `[${this.logLabel}] 「${nickname}」本次在线 ${onlineDuration}s，累计写入 ${playerId}`,
@@ -414,16 +439,15 @@ export class MCSManagerInstance {
       bot
         .broadcast(botChannels, message, 0)
         .catch((err: any) =>
-          logger.error(
-            `[${this.logLabel}] 广播到 ${bot.platform} 失败:`,
-            err,
-          ),
+          logger.error(`[${this.logLabel}] 广播到 ${bot.platform} 失败:`, err),
         );
     });
 
     if (!matched) {
       logger.info(
-        `[${this.logLabel}] 无匹配的平台机器人，消息未广播：${channels.join(',')}｜${message}`,
+        `[${this.logLabel}] 无匹配的平台机器人，消息未广播：${channels.join(
+          ',',
+        )}｜${message}`,
       );
     }
   }

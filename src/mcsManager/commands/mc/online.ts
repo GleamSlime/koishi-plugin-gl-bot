@@ -1,8 +1,9 @@
-import { isEmpty } from 'lodash';
+import { isEmpty, isEqual } from 'lodash';
 import { BotCommandBase } from '../../../gl/commands/base';
 import MinecraftQueQiao from '../../../queQiao';
 import { formatOnlineTime } from '../../../utils';
 import { MCSManagerBot } from '../../bot';
+import { RemoteInstanceStatusEnum } from '../../constants';
 import { McUser } from '../../type';
 
 export class MCBotGameOnline extends BotCommandBase {
@@ -95,6 +96,29 @@ export class MCBotGameOnline extends BotCommandBase {
 
       cached.config = server.config;
       MCBotGameOnline.list[serverName] = cached;
+      result[serverName] = cached;
+    }
+
+    // 无鹊桥、靠 MCS 终端日志维护在线表的实例也要进结果，
+    // 否则这些服务器上的玩家在「服务器 在线」里查不到
+    for (const instance of bot.panel.allInstances) {
+      const serverName = instance.serverName;
+      if (result[serverName]) {
+        continue;
+      }
+
+      const cached = MCBotGameOnline.list[serverName];
+      if (!cached) {
+        continue;
+      }
+
+      if (!isEqual(instance.cfg.status, RemoteInstanceStatusEnum.RUNNING)) {
+        // 服务器已停止，退出日志多半没打出来，直接清掉残留的在线记录
+        delete MCBotGameOnline.list[serverName];
+        continue;
+      }
+
+      cached.config = { serverName } as any;
       result[serverName] = cached;
     }
 

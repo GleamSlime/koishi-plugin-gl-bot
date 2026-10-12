@@ -122,6 +122,11 @@ export class MCSManagerPanel {
     }
   }
 
+  // 全部受管实例（跨所有节点）
+  get allInstances(): MCSManagerInstance[] {
+    return this.remotes.flatMap(remote => remote.instances);
+  }
+
   /// 定时检查远程连接状态
   watchRemoteConnections() {
     clearInterval(this.watchRemoteClock as NodeJS.Timeout);

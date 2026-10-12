@@ -17,7 +17,12 @@ export type ParsedPlayerEvent =
 const JOIN_REG = /^(.*?)\b(\S+) joined the game\b/i;
 const JOIN_CN_REG = /(?:\[Server\])?\s*(\S+) 加入了(?:游戏|服务器)/;
 const QUIT_REG = /^(.*?)\b(\S+) left the game\b/i;
-const QUIT_CN_REG = /(?:\[Server\])?\s*(\S+) 离开了(?:游戏|服务器)/;
+const QUIT_CN_REG = /(?:\[Server\])?\s*(\S+) (?:离开了|退出了)(?:游戏|服务器)/;
+// 异常掉线不一定输出 "left the game"，这些变体同样代表玩家下线
+const QUIT_LOST_REG =
+  /^(.*?)\b([A-Za-z0-9_]{1,16})(?:\s*\/[^\s\]]+|\s*\[[^\]]*\])*\s+lost connection\b/i;
+const QUIT_DISCONNECTING_REG =
+  /^disconnecting\s+([A-Za-z0-9_]{1,16})(?:\/[^\s:]+(?::\d+)?)?\b/i;
 const CHAT_ANGLE_REG = /^<([A-Za-z0-9_]{1,16})>\s+(.+)$/;
 const CHAT_COLON_REG = /^([A-Za-z0-9_]{1,16})[：:]\s+(.+)$/;
 
@@ -48,9 +53,17 @@ export function parsePlayerEvent(line: string): ParsedPlayerEvent | null {
     return { type: 'join', nickname: joinMatch[2] ?? joinMatch[1] };
   }
 
-  const quitMatch = line.match(QUIT_REG) ?? line.match(QUIT_CN_REG);
+  const quitMatch =
+    line.match(QUIT_REG) ??
+    line.match(QUIT_CN_REG) ??
+    line.match(QUIT_LOST_REG) ??
+    line.match(QUIT_DISCONNECTING_REG);
   if (quitMatch) {
-    return { type: 'quit', nickname: quitMatch[2] ?? quitMatch[1] };
+    const nickname = quitMatch[2] ?? quitMatch[1];
+    if (/\bthere are\b/i.test(quitMatch[1] ?? '')) {
+      return null;
+    }
+    return { type: 'quit', nickname };
   }
 
   const chatMatch =
@@ -90,6 +103,16 @@ export class McLogPlayerParser {
 
   // 事件串行处理，保持加入/聊天/离开的先后顺序
   private chain: Promise<void> = Promise.resolve();
+
+  // daemon 可能把一行日志拆进两个 chunk，未闭合的行先缓存
+  private pendingLine = '';
+
+  private pendingFlushTimer: NodeJS.Timeout | null = null;
+
+  // 无换行结尾时判定为整行的等待时间
+  private readonly lineFlushMs = 800;
+
+  private lastRawLine = '';
 
   // 已丢弃的回放日志条数（仅用于提示一次）
   private graceWarned = false;
@@ -133,37 +156,84 @@ export class McLogPlayerParser {
   }
 
   private dispatch(raw: string) {
-    let previousLine = '';
+    // 上一段未闭合的内容拼在本次输入前，整行了才解析
+    const segments = (this.pendingLine + raw).split(/\r?\n/);
 
-    for (const part of raw.split(/\r?\n/)) {
-      const line = cleanConsoleLine(part);
-      if (!line || line === previousLine) continue;
-      previousLine = line;
+    this.clearPendingFlush();
+    this.pendingLine = segments.pop() ?? '';
 
-      const event = parsePlayerEvent(line);
-      if (!event) continue;
-
-      const now = Date.now();
-      const key = `${event.type}|${event.nickname}|${'message' in event ? event.message : ''}`;
-      if (key === this.lastEventKey && now - this.lastEventAt < this.repeatWindowMs) {
-        logger.debug(`[${this.label}] 重复事件已忽略：${key}`);
-        continue;
-      }
-      this.lastEventKey = key;
-      this.lastEventAt = now;
-
-      logger.info(
-        `[${this.label}] 终端日志识别玩家事件：${key.slice(0, 120)}`,
+    if (this.pendingLine) {
+      // 尾部没有换行，可能是一行没发完，也可能本来就没有行尾
+      this.pendingFlushTimer = setTimeout(
+        () => this.flushPendingLine(),
+        this.lineFlushMs,
       );
-
-      this.chain = this.chain
-        .then(() => this.onEvent(event))
-        .catch(err => {
-          logger.error(
-            `[${this.label}] 处理终端日志玩家事件失败:`,
-            err,
-          );
-        }) as Promise<void>;
+      this.pendingFlushTimer.unref?.();
     }
+
+    for (const part of segments) {
+      this.processLine(part);
+    }
+  }
+
+  private flushPendingLine() {
+    this.clearPendingFlush();
+
+    const line = this.pendingLine;
+    this.pendingLine = '';
+
+    if (line) {
+      this.processLine(line);
+    }
+  }
+
+  private clearPendingFlush() {
+    if (this.pendingFlushTimer) {
+      clearTimeout(this.pendingFlushTimer);
+      this.pendingFlushTimer = null;
+    }
+  }
+
+  public dispose() {
+    this.clearPendingFlush();
+    this.pendingLine = '';
+  }
+
+  private processLine(part: string) {
+    const line = cleanConsoleLine(part);
+    if (!line || line === this.lastRawLine) {
+      return;
+    }
+    this.lastRawLine = line;
+
+    const event = parsePlayerEvent(line);
+    if (!event) return;
+
+    const now = Date.now();
+    const key = `${event.type}|${event.nickname}|${
+      'message' in event ? event.message : ''
+    }`;
+    if (
+      key === this.lastEventKey &&
+      now - this.lastEventAt < this.repeatWindowMs
+    ) {
+      logger.debug(`[${this.label}] 重复事件已忽略：${key}`);
+      return;
+    }
+    this.lastEventKey = key;
+    this.lastEventAt = now;
+
+    logger.info(
+      `[${this.label}] 终端日志识别玩家事件：${key.slice(0, 120)}`,
+    );
+
+    this.chain = this.chain
+      .then(() => this.onEvent(event))
+      .catch(err => {
+        logger.error(
+          `[${this.label}] 处理终端日志玩家事件失败:`,
+          err,
+        );
+      }) as Promise<void>;
   }
 }
