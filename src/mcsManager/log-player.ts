@@ -26,6 +26,8 @@ const QUIT_DISCONNECTING_REG =
 // 方舟输出：`[2026.11.14-06.27.54:383][540]2026.11.14_06.27.54: 玩家名 [UniqueNetId:xxx Platform:None] joined this ARK!`
 const ARK_JOIN_REG =
   /^(?:\[[^\]]*\]\[[^\]]*\][^:]*:\s*)?(.+?)\s*\[UniqueNetId:[^\]]*\]\s*joined this ARK/i;
+const ARK_QUIT_REG =
+  /^(?:\[[^\]]*\]\[[^\]]*\][^:]*:\s*)?(.+?)\s*\[UniqueNetId:[^\]]*\]\s*left this ARK/i;
 const CHAT_ANGLE_REG = /^<([A-Za-z0-9_]{1,16})>\s+(.+)$/;
 const CHAT_COLON_REG = /^([A-Za-z0-9_]{1,16})[：:]\s+(.+)$/;
 
@@ -50,6 +52,11 @@ export function parsePlayerEvent(line: string): ParsedPlayerEvent | null {
   const arkJoinMatch = line.match(ARK_JOIN_REG);
   if (arkJoinMatch) {
     return { type: 'join', nickname: arkJoinMatch[1].trim() };
+  }
+
+  const arkQuitMatch = line.match(ARK_QUIT_REG);
+  if (arkQuitMatch) {
+    return { type: 'quit', nickname: arkQuitMatch[1].trim() };
   }
 
   const joinMatch = line.match(JOIN_REG) ?? line.match(JOIN_CN_REG);

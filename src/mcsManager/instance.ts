@@ -308,10 +308,12 @@ export class MCSManagerInstance {
     const serverName = this.serverName;
     const { nickname } = event;
 
-    // 方舟只做进服播报，不参与 MC 在线列表与玩家库
+    // 方舟只做进出服播报，不参与 MC 在线列表与玩家库
     if (this.isArk) {
       if (event.type === 'join') {
         this.broadcastLogMessage(`${nickname} 进入 ${serverName}`);
+      } else if (event.type === 'quit') {
+        this.broadcastLogMessage(`${nickname} 退出 ${serverName}`);
       }
       return;
     }
