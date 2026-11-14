@@ -56,14 +56,14 @@ export interface ServiceRemoteInstanceItemConfig {
   createDatetime: number;
   lastDatetime: number;
   type: string;
-  tag: [];
+  tag: string[];
   endTime: number;
   fileCode: string;
   processType: string;
   updateCommand: string;
   crlf: number;
   category: number;
-  enableRcon: false;
+  enableRcon: boolean;
   rconPassword: string;
   rconPort: number;
   rconIp: string;

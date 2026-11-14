@@ -254,9 +254,37 @@ export class MCSManagerInstance {
 
   private logFallbackSkipLogged = false;
 
+  // 非 Minecraft 实例跳过日志连接的提示只打一次
+  public streamSkipLogged = false;
+
   // 日志前缀固定用实例昵称，避免鹊桥在线/离线时同一条日志出现两种标识
   private get logLabel() {
     return this.cfg.config.nickname || '未知服务器';
+  }
+
+  // 只有 Minecraft 服务端才有「玩家加入/离开/聊天」语义，
+  // 方舟之类的实例终端日志格式完全不同，解析只会产生假事件并白占 WS 连接额度
+  public get isMinecraft() {
+    if (this.cfg.config.enableRcon) {
+      return true;
+    }
+
+    const type = this.cfg.config.type ?? '';
+
+    return /minecraft|bukkit|forge|fabric|paper|bedrock/i.test(type);
+  }
+
+  // 方舟实例靠 tag 标记，终端只识别进服行
+  public get isArk() {
+    const tags = this.cfg.config.tag as unknown;
+    const list = Array.isArray(tags) ? tags : [];
+
+    return list.some(tag => String(tag).includes('方舟'));
+  }
+
+  // 是否值得占用一条控制台日志流
+  public get shouldStreamConsole() {
+    return this.isMinecraft || this.isArk;
   }
 
   // 流认证完成的时刻，用于丢弃重连时 daemon 回放的旧日志
@@ -279,6 +307,14 @@ export class MCSManagerInstance {
   private async handlePlayerEvent(event: ParsedPlayerEvent) {
     const serverName = this.serverName;
     const { nickname } = event;
+
+    // 方舟只做进服播报，不参与 MC 在线列表与玩家库
+    if (this.isArk) {
+      if (event.type === 'join') {
+        this.broadcastLogMessage(`${nickname} 进入 ${serverName}`);
+      }
+      return;
+    }
 
     if (!MCBotGameOnline.list[serverName]) {
       MCBotGameOnline.list[serverName] = {

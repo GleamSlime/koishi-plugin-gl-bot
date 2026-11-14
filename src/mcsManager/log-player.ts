@@ -23,6 +23,9 @@ const QUIT_LOST_REG =
   /^(.*?)\b([A-Za-z0-9_]{1,16})(?:\s*\/[^\s\]]+|\s*\[[^\]]*\])*\s+lost connection\b/i;
 const QUIT_DISCONNECTING_REG =
   /^disconnecting\s+([A-Za-z0-9_]{1,16})(?:\/[^\s:]+(?::\d+)?)?\b/i;
+// 方舟输出：`[2026.11.14-06.27.54:383][540]2026.11.14_06.27.54: 玩家名 [UniqueNetId:xxx Platform:None] joined this ARK!`
+const ARK_JOIN_REG =
+  /^(?:\[[^\]]*\]\[[^\]]*\][^:]*:\s*)?(.+?)\s*\[UniqueNetId:[^\]]*\]\s*joined this ARK/i;
 const CHAT_ANGLE_REG = /^<([A-Za-z0-9_]{1,16})>\s+(.+)$/;
 const CHAT_COLON_REG = /^([A-Za-z0-9_]{1,16})[：:]\s+(.+)$/;
 
@@ -44,6 +47,11 @@ export function cleanConsoleLine(text: string): string {
  * 从 MCS 终端日志行识别玩家加入/离开/聊天（无鹊桥配置时的兜底数据源）
  */
 export function parsePlayerEvent(line: string): ParsedPlayerEvent | null {
+  const arkJoinMatch = line.match(ARK_JOIN_REG);
+  if (arkJoinMatch) {
+    return { type: 'join', nickname: arkJoinMatch[1].trim() };
+  }
+
   const joinMatch = line.match(JOIN_REG) ?? line.match(JOIN_CN_REG);
   if (joinMatch) {
     // 进服统计行（如 "There are 3 of a max of 20 players online"）不是玩家
@@ -146,7 +154,9 @@ export class McLogPlayerParser {
       if (!this.graceWarned) {
         this.graceWarned = true;
         logger.info(
-          `[${this.label}] 终端日志解析宽限期内，丢弃 ${text.split(/\r?\n/).filter(l => l.trim()).length} 行（疑似重连回放的旧日志）`,
+          `[${this.label}] 终端日志解析宽限期内，丢弃 ${
+            text.split(/\r?\n/).filter(l => l.trim()).length
+          } 行（疑似重连回放的旧日志）`,
         );
       }
       return;
@@ -223,17 +233,12 @@ export class McLogPlayerParser {
     this.lastEventKey = key;
     this.lastEventAt = now;
 
-    logger.info(
-      `[${this.label}] 终端日志识别玩家事件：${key.slice(0, 120)}`,
-    );
+    logger.info(`[${this.label}] 终端日志识别玩家事件：${key.slice(0, 120)}`);
 
     this.chain = this.chain
       .then(() => this.onEvent(event))
       .catch(err => {
-        logger.error(
-          `[${this.label}] 处理终端日志玩家事件失败:`,
-          err,
-        );
+        logger.error(`[${this.label}] 处理终端日志玩家事件失败:`, err);
       }) as Promise<void>;
   }
 }

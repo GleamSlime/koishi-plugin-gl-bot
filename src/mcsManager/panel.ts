@@ -6,10 +6,7 @@ import { GLBot, GLBotConfigType } from '../gl';
 import { MCSManagerAPI } from './api';
 import { RemoteInstanceStatusEnum } from './constants';
 import { MCSManagerInstance } from './instance';
-import {
-  ServiceRemoteInstanceItem,
-  ServiceRemoteItemCustom,
-} from './type';
+import { ServiceRemoteInstanceItem, ServiceRemoteItemCustom } from './type';
 import { MCSManagerWebSocketIO } from './ws';
 
 const logger = new Logger('mcsmanager-panel');
@@ -98,7 +95,12 @@ export class MCSManagerPanel {
 
       if (insertRemotes !== false) {
         logger.info(
-          `已获取到 ${this.remotes.length} 个远程节点及其实例 ${this.remotes.reduce((acc, remote) => acc + remote.instances.length, 0)} 个`,
+          `已获取到 ${
+            this.remotes.length
+          } 个远程节点及其实例 ${this.remotes.reduce(
+            (acc, remote) => acc + remote.instances.length,
+            0,
+          )} 个`,
         );
       }
 
@@ -239,9 +241,21 @@ export class MCSManagerPanel {
     remote: ServiceRemoteItemCustom,
     instance: MCSManagerInstance,
   ) {
-    if (
-      isEqual(instance.cfg.status, RemoteInstanceStatusEnum.RUNNING)
-    ) {
+    if (isEqual(instance.cfg.status, RemoteInstanceStatusEnum.RUNNING)) {
+      // 非 Minecraft / 方舟实例的终端日志没有玩家事件语义，
+      // 解析会产出假事件，且白占 mcManagerMaxConnectWs 额度
+      if (!instance.shouldStreamConsole) {
+        if (!instance.streamSkipLogged) {
+          instance.streamSkipLogged = true;
+          logger.info(
+            `[${instance.serverName}] 未标记为 Minecraft/方舟实例(type=${
+              instance.cfg.config.type || '未知'
+            })，跳过控制台日志连接`,
+          );
+        }
+        return;
+      }
+
       const uuid = instance.cfg.instanceUuid;
       const existing = this.remoteConnectionsMap.get(uuid);
 
@@ -261,10 +275,7 @@ export class MCSManagerPanel {
       }
 
       // 上限检测
-      if (
-        this.remoteConnectionsMap.size >=
-        this.config.mcManagerMaxConnectWs
-      ) {
+      if (this.remoteConnectionsMap.size >= this.config.mcManagerMaxConnectWs) {
         logger.info(
           `[${instance.cfg.config.nickname}] WS 连接数已达上限(${this.config.mcManagerMaxConnectWs})，该实例暂未连接，控制台日志兜底不可用`,
         );
@@ -353,8 +364,7 @@ export class MCSManagerPanel {
     }
 
     // 连词匹配存在时只返回连词结果，否则降级用分词匹配
-    const result =
-      substringMatches.size > 0 ? substringMatches : tokenMatches;
+    const result = substringMatches.size > 0 ? substringMatches : tokenMatches;
     return Array.from(result.values()).sort((a, b) => b.sort - a.sort);
   }
 
