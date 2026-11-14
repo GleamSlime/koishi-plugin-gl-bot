@@ -1,0 +1,66 @@
+name: publish
+
+on:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # 可信发布要求 npm >= 11.5.1
+      - name: Upgrade npm
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Detect version change
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "koishi-plugin-gl-bot@$VERSION" version >/dev/null 2>&1; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$VERSION 已发布于 npm，跳过"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$VERSION 尚未发布，开始发布"
+          fi
+
+      - name: Publish to npmjs.com
+        if: steps.version.outputs.changed == 'true'
+        run: npm publish --access public --provenance
+
+      # GitHub Packages 要求包名带 owner scope
+      - name: Publish to GitHub Packages
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='@gleamslime/koishi-plugin-gl-bot';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+          printf '@gleamslime:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > .npmrc
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
