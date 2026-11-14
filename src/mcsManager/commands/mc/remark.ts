@@ -65,7 +65,7 @@ export class MCBotRemarkCommand extends BotCommandBase {
   private hasAdminRole(cmd: Argv) {
     const userRole = cmd.session.event.member?.roles?.at(0);
     return [BotCommandRole.Admin, BotCommandRole.Owner].includes(
-      userRole as BotCommandRole,
+      userRole as unknown as BotCommandRole,
     );
   }
 
