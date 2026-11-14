@@ -3,7 +3,7 @@
     "outDir": "lib",
     "rootDir": "src",
     "target": "es2021",
-    "lib": ["es2021"],
+    "lib": ["es2022"],
     "module": "commonjs",
     "declaration": true,
     "strict": false,
