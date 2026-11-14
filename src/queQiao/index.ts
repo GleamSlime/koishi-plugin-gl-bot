@@ -1,4 +1,5 @@
 import { Bot, Context, Logger, Schema, h } from 'koishi';
+import { lookup } from 'dns/promises';
 import { isEqual, isString } from 'lodash';
 import { Rcon } from 'rcon-client';
 import { RawData, WebSocket } from 'ws';
@@ -16,6 +17,16 @@ const enUS = require('./locale/en-US.json');
 export const name = 'minecraft-sync-msg';
 
 const logger = new Logger('minecraft-sync-msg');
+
+// 解析实际 IP，便于区分「动态域名指向变了」和「端口没监听」
+async function resolveHost(host: string): Promise<string> {
+  try {
+    const { address } = await lookup(host);
+    return address;
+  } catch (err) {
+    return `解析失败(${(err as any)?.code || (err as Error)?.message})`;
+  }
+}
 
 interface MessageColor {
   output: string;
@@ -135,16 +146,23 @@ class MinecraftQueQiao {
       );
       return;
     } else {
-      this.connectWebSocket();
+      this.connectWebSocket().catch(err => {
+        logger.error(`[${this.serverName}] 建立WebSocket连接失败:`, err);
+      });
     }
   }
 
-  public connectWebSocket() {
+  public async connectWebSocket() {
     const headers = {
       'x-self-name': encodeURIComponent(this.config.serverName),
       Authorization: `Bearer ${this.config.Token}`,
       'x-client-origin': 'NOTkoishi',
     };
+
+    const address = await resolveHost(this.config.wsHost);
+    logger.info(
+      `[${this.serverName}] 连接 ${this.config.wsHost}:${this.config.wsPort}（${address}）`,
+    );
 
     this.ws = new WebSocket(
       `ws://${this.config.wsHost}:${this.config.wsPort}/minecraft/ws`,
@@ -341,7 +359,10 @@ class MinecraftQueQiao {
 
       const lastTime = new Date(user[0].lastTime).getTime();
       const nowTime = Date.now();
-      const onlineDuration = Math.max(0, Math.floor((nowTime - lastTime) / 1000));
+      const onlineDuration = Math.max(
+        0,
+        Math.floor((nowTime - lastTime) / 1000),
+      );
 
       let onlineTimeJSON: { mc?: Record<string, number> } = {};
       try {
@@ -451,8 +472,9 @@ class MinecraftQueQiao {
       }
 
       this.reconnectAttempts++;
+      const address = await resolveHost(this.config.wsHost);
       logger.info(
-        `[${this.serverName}] 尝试第 ${this.reconnectAttempts} 次重连...`,
+        `[${this.serverName}] 尝试第 ${this.reconnectAttempts} 次重连... ${this.config.wsHost}:${this.config.wsPort}（${address}）`,
       );
 
       try {
@@ -484,7 +506,7 @@ class MinecraftQueQiao {
 
         ws.on('error', err => {
           logger.error(
-            `[${this.serverName}] <${this.reconnectAttempts}> | ${this.config.wsHost}:${this.config.wsPort} 重连时发生错误:`,
+            `[${this.serverName}] <${this.reconnectAttempts}> | ${this.config.wsHost}:${this.config.wsPort}（${address}）重连时发生错误:`,
             err,
           );
           ws.close();
