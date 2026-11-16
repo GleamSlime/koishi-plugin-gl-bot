@@ -9,8 +9,7 @@ import { MCBotGameOnline } from '../mcsManager/commands/mc/online';
 import { clearSessionContentToMcMessage } from '../utils';
 import McWss from './mcwss';
 import { RconConf, WsConf, getListeningEvent } from './values';
-// import zhCN from "./locale/zh-CN.json";
-// import enUS from "./locale/en-US.json";
+// 构建时由 scripts/copy-assets.js 复制到 lib
 const zhCN = require('./locale/zh-CN.json');
 const enUS = require('./locale/en-US.json');
 

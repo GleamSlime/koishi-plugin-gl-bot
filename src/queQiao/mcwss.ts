@@ -4,8 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { WsMessageData } from '.';
 import { GLQueQiaoAdapter } from '../gl/queqiao.adapter';
 import { getListeningEvent, getSubscribedEvents, WsConf } from './values';
-// import zhCN from "./locale/zh-CN.json";
-// import enUS from "./locale/en-US.json";
+// 构建时由 scripts/copy-assets.js 复制到 lib
 const zhCN = require('./locale/zh-CN.json');
 const enUS = require('./locale/en-US.json');
 

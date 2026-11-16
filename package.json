@@ -20,7 +20,7 @@
     "lint": "eslint .",
     "fl": "prettier --write . && eslint . --fix",
     "build:console": "koishi-console build",
-    "build": "tsc -p tsconfig.test.json && cp -r src/queQiao/locale lib/queQiao/ && cp -r src/mcsManager/json lib/mcsManager/"
+    "build": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node scripts/copy-assets.js"
   },
   "files": [
     "lib",

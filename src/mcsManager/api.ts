@@ -11,6 +11,7 @@ import {
 } from './type';
 
 import { IS_DEV } from '../constants';
+// 构建时由 scripts/copy-assets.js 复制到 lib
 const createInstanceUpload = require('./json/createInstanceUpload.json');
 
 export class MCSManagerAPI {

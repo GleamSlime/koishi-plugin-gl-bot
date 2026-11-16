@@ -39,6 +39,33 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # 模拟 npm 安装后的加载，避免把资源缺失的包发出去
+      - name: Verify package loads
+        run: |
+          npm pack >/dev/null 2>&1
+          TARBALL=$(ls koishi-plugin-gl-bot-*.tgz | head -1)
+          mkdir -p /tmp/verify && tar -xzf "$TARBALL" -C /tmp/verify
+          cd /tmp/verify/package
+          node -e '
+            const { execSync } = require("child_process");
+            const fs = require("fs");
+            const path = require("path");
+            const root = process.cwd();
+            const files = execSync("find lib -name \"*.js\"").toString().trim().split("\n");
+            const re = /require\(["\x27](\.[^"\x27]+)["\x27]\)/g;
+            let broken = 0;
+            for (const f of files) {
+              const code = fs.readFileSync(path.join(root, f), "utf8");
+              for (const m of code.matchAll(re)) {
+                const base = path.resolve(path.dirname(path.join(root, f)), m[1]);
+                const hit = ["", ".js", ".json"].some(ext => fs.existsSync(base + ext));
+                if (!hit) { console.error(f + " -> " + m[1]); broken++; }
+              }
+            }
+            if (broken) { console.error(broken + " 处资源引用缺失"); process.exit(1); }
+            console.log("包内资源引用完整，检查 " + files.length + " 个模块");
+          '
+
       - name: Detect version change
         id: version
         run: |
